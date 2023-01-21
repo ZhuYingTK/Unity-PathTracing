@@ -1,0 +1,466 @@
+#pragma kernel CSMain
+
+static const float PI = 3.14159265f;
+static const float EPSILON = 1e-8;
+float _Seed;
+
+RWTexture2D<float4> Result;
+Texture2D<float4> _SkyBoxTexture;
+SamplerState sampler_SkyBoxTexture;
+
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+float2 _Pixel;
+
+float _HDRIntensity;
+
+float4 _DirectionalLight;
+
+float2 _PixelOffset;
+
+struct Sphere
+{
+    float3 position;
+    float radius;
+    float3 albedo;
+    float3 specular;
+    float smoothness;
+    float3 emission;
+};
+StructuredBuffer<Sphere> _Spheres;
+
+struct MeshObject
+{
+    float4x4 localToWorldMatrix;
+    int indices_offset;
+    int indices_count;
+};
+
+StructuredBuffer<MeshObject> _MeshObjects;
+StructuredBuffer<float3> _Vertices;
+StructuredBuffer<int> _Indices;
+
+struct AABBBox
+{
+    float3 Pmin;
+    float3 Pmax;
+};
+
+struct Ray
+{
+    float3 origin;      //起始点
+    float3 direction;   //目标点
+    float3 energy;      //当前能量
+};
+
+struct RayHit
+{
+    float3 position;    //命中点
+    float distance;     //到光线出发点距离
+    float3 normal;      //法线
+    float3 albedo;      //命中点的反照率
+    float3 specular;    //命中点的镜面反射
+    float smoothness;   //命中点粗糙度
+    float3 emission;    //命中点自发光
+};
+
+
+float rand()
+{
+    float result = frac(sin(_Seed / 100.0f * dot(_Pixel, float2(12.9898f, 78.233f))) * 43758.5453f);
+    _Seed += 1.0f;
+    return result;
+}
+
+float3x3 GetTangentSpace(float3 normal)
+{
+    float3 helper = float3(1,0,0);
+    if(abs(normal.x) > 0.99f)
+        helper = float3(0,0,1);
+
+    //生产切线和副切线
+    float3 tangent = normalize(cross(normal,helper));
+    float3 binormal = normalize(cross(normal,tangent));
+    return float3x3 (tangent,binormal,normal);
+}
+
+float3 SampleHemisphere(float3 normal,float alpha = 0)
+{
+    //根据两个角度确定向量,其中alpha是对采样的变换
+    float cosTheta = pow( rand(),1.0f / (alpha + 1.0f));
+    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+    float phi = 2 * PI * rand();
+    float3 tangentSpaceDir = float3(cos(phi) * sinTheta, sin(phi) * sinTheta,cosTheta);
+
+    //坐标转换
+    return mul(tangentSpaceDir,GetTangentSpace(normal));
+}
+
+float sdot(float3 x, float3 y, float f = 1.0f)
+{
+    return saturate(dot(x, y) * f);
+}
+
+float energy(float3 color)
+{
+    //平均颜色
+    return dot(color,1.0f / 3.0f);
+}
+
+float SmoothnessToPhongAlpha(float s)
+{
+    return pow(1000.0f,s * s);
+}
+
+
+
+//创建光线
+Ray CreateRay(float3 origin,float3 direction)
+{
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    ray.energy = float3(1.0f,1.0f,1.0f);
+    return ray;
+}
+
+//发生相交(创建光线命中点)
+RayHit CreateRayHit()
+{
+    RayHit hit;
+    hit.position = float3(0.0f, 0.0f, 0.0f);
+    hit.distance = 1.#INF;
+    hit.normal = float3(0.0f, 0.0f, 0.0f);
+    hit.albedo = float3(0.0f, 0.0f, 0.0f);
+    hit.specular = float3(0.0f, 0.0f, 0.0f);
+    hit.smoothness = 0.0f;
+    hit.emission = float3(0.0f, 0.0f, 0.0f);
+    return hit;
+}
+
+//与地平面相交
+void IntersectGroundPlane(Ray ray,inout RayHit bestHit)
+{
+    //计算光线到地平面走过的距离
+    float t = -ray.origin.y / ray.direction.y;
+    //如果光线到地面的距离>0且是最小的距离
+    //判定为击中，更新数据
+    if(t > 0 && t< bestHit.distance)
+    {
+        bestHit.distance = t;
+        bestHit.position = ray.origin + t * ray.direction;
+        bestHit.normal = float3(0.f,1.0f,0.0f);
+        bestHit.albedo = float3(0.9f,0.9f,0.9f);
+        bestHit.specular = float3(0.08f,0.08f,0.08f);
+        bestHit.smoothness = 0.03;
+        bestHit.emission = 0;
+    }
+}
+
+void IntersectSphere(Ray ray,inout RayHit bestHit,Sphere sphere)
+{
+    //计算射线与球体相交的距离
+    //由线方程与求方程连列求解得
+    //https://en.wikipedia.org/wiki/Line%E2%80%93sphere_intersection
+    float3 d = ray.origin - sphere.position;
+    float p1 = -dot(ray.direction,d);
+    float p2sqr = p1 * p1 - dot(d,d) + sphere.radius * sphere.radius;
+    if(p2sqr < 0)
+        return;
+    float p2 = sqrt(p2sqr);
+    float t = p1 - p2 > 0 ?
+              p1 - p2 :
+              p1 + p2 ;
+    if(t > 0 && t< bestHit.distance)
+    {
+        bestHit.distance = t;
+        bestHit.position = ray.origin + t * ray.direction;
+        bestHit.normal = normalize(bestHit.position - sphere.position);
+        bestHit.albedo = sphere.albedo;
+        bestHit.specular = sphere.specular;
+        bestHit.smoothness = sphere.smoothness;
+        bestHit.emission = sphere.emission;
+    }
+}
+
+
+void IntersectAABB(Ray ray,inout RayHit bestHit,AABBBox box)
+{
+    //计算光线与AABB盒子的相交
+    //T为当前候选面值和非候选面值
+    float2 tx,ty,tz,T;
+    if(ray.direction.x == 0)
+    {
+        //如果在slab外
+        if(ray.origin.x > box.Pmax.x || ray.origin.x < box.Pmin.x)
+            return;
+        //无视当前轴向的相交面
+        else
+        {
+            tx.x = -1.#INF;
+            tx.y = 1.#INF;
+        }
+    }
+    else
+    {
+        tx.x = (box.Pmin.x - ray.origin.x) / ray.direction.x;
+        tx.y = (box.Pmax.x - ray.origin.x) / ray.direction.x;
+    }
+    T.x = min(tx.x,tx.y);
+    T.y = max(tx.x,tx.y);
+
+    //y分量情况
+    if(ray.direction.y == 0)
+    {
+        //如果在slab外
+        if(ray.origin.y > box.Pmax.y || ray.origin.y < box.Pmin.y)
+            return;
+        //无视当前轴向的相交面
+        else
+        {
+            ty.x = -1.#INF;
+            ty.y = 1.#INF;
+        }
+    }
+    else
+    {
+        ty.x = (box.Pmin.y - ray.origin.y) / ray.direction.y;
+        ty.y = (box.Pmax.y - ray.origin.y) / ray.direction.y;
+    }
+    T.x = max(T.x,min(ty.x,ty.y));
+    T.y = min(T.y,max(ty.x,ty.y));
+
+    //z分量情况
+    if(ray.direction.z == 0)
+    {
+        //如果在slab外
+        if(ray.origin.z > box.Pmax.z || ray.origin.z < box.Pmin.z)
+            return;
+        //无视当前轴向的相交面
+        else
+        {
+            tz.x = -1.#INF;
+            tz.y = 1.#INF;
+        }
+    }
+    else
+    {
+        tz.x = (box.Pmin.z - ray.origin.z) / ray.direction.z;
+        tz.y = (box.Pmax.z - ray.origin.z) / ray.direction.z;
+    }
+    T.x = max(T.x,min(tz.x,tz.y));
+    T.y = min(T.y,max(tz.x,tz.y));
+    //不相交退出
+    if(T.x >= T.y) return;
+    //着色部分
+    float t = T.x;
+    if(t > 0 && t< bestHit.distance)
+    {
+        bestHit.distance = t;
+        bestHit.position = ray.origin + t * ray.direction;
+        if(T.x == tx.x)
+            bestHit.normal = float3(-1.0f,0.0f,0.0f);
+        if(T.x == tx.y)
+            bestHit.normal = float3(1.0f,0.0f,0.0f);
+        if(T.x == ty.x)
+            bestHit.normal = float3(0.0f,-1.0f,0.0f);
+        if(T.x == ty.y)
+            bestHit.normal = float3(0.0f,1.0f,0.0f);
+        if(T.x == tz.x)
+            bestHit.normal = float3(0.0f,0.0f,1.0f);
+        if(T.x == tz.y)
+            bestHit.normal = float3(0.0f,0.0f,-1.0f);
+        bestHit.albedo = float3(0.9f,0.9f,0.9f);
+        bestHit.specular = float3(0.08f,0.08f,0.08f);
+        bestHit.smoothness = 0.03;
+        bestHit.emission = 0;
+    }
+}
+
+//三角形测试方法
+bool IntersectTriangle_MT97(Ray ray,float3 vert0,float3 vert1,float3 vert2,
+                                inout float t,inout float u,inout float v)
+{
+    //从v0指向v1,v2的两条向量
+    float3 edge1 = vert1 - vert0;
+    float3 edge2 = vert2 - vert0;
+
+    //获得P向量
+    float3 P_vec = cross(ray.direction,edge2);
+    //计算方程参数行列式
+    float det = dot(edge1,P_vec);
+    //进行背面剔除
+    if(det < EPSILON)
+        return false;
+    float inv_det = 1.0f / det;
+
+    float3 T_vec = ray.origin - vert0;
+    //计算u值参数并测试
+    u = dot(T_vec,P_vec) * inv_det;
+    if(u < 0.0 || u > 1.0f)
+        return false;
+    
+    float3 Q_vec = cross(T_vec,edge1);
+    //计算v值参数并测试
+    v = dot(ray.direction, Q_vec) * inv_det;
+    if(v < 0.0 || u+v > 1.0f)
+        return  false;
+    t = dot(edge2,Q_vec) * inv_det;
+    return true;
+}
+
+void IntersectMeshObject(Ray ray,inout RayHit bestHit,MeshObject meshobject)
+{
+    uint offset = meshobject.indices_offset;
+    uint count = offset + meshobject.indices_count;
+    for(uint i = offset ; i < count ; i+=3)
+    {
+        float3 v0 = (mul(meshobject.localToWorldMatrix,float4(_Vertices[_Indices[i]],1))).xyz;
+        float3 v1 = (mul(meshobject.localToWorldMatrix,float4(_Vertices[_Indices[i+1]],1))).xyz;
+        float3 v2 = (mul(meshobject.localToWorldMatrix,float4(_Vertices[_Indices[i+2]],1))).xyz;
+        float t,u,v;
+        t = 1.#INF ; u=0;v=0;
+        if (IntersectTriangle_MT97(ray, v0, v1, v2, t, u, v))
+        {
+            if (t > 0 && t < bestHit.distance)
+            {
+                bestHit.distance = t;
+                bestHit.position = ray.origin + t * ray.direction;
+                bestHit.normal = normalize(cross(v1 - v0, v2 - v0));
+                bestHit.albedo = 0.0f;
+                bestHit.specular = 0.65f;
+                bestHit.smoothness = 0.99f;
+                bestHit.emission = 0.0f;
+            }
+        }
+    }
+}
+
+//追踪的框架
+RayHit Trace(Ray ray)
+{
+    RayHit bestHit = CreateRayHit();
+    IntersectGroundPlane(ray,bestHit);
+
+    uint count,stride,i;
+    // _Spheres.GetDimensions(count,stride);
+    // for(i = 0 ; i < count ; i++)
+    // {
+    //     IntersectSphere(ray,bestHit,_Spheres[i]);
+    // }
+
+    _MeshObjects.GetDimensions(count, stride);
+    for (i = 0; i < count; i++)
+    {
+        IntersectMeshObject(ray, bestHit, _MeshObjects[i]);
+    }
+    
+    return bestHit;
+}
+
+//着色函数
+float3 Shade (inout Ray ray,RayHit hit)
+{
+    if(hit.distance < 1.#INF)
+    {
+        //考虑浮点数精确性进行偏移
+        ray.origin = hit.position + hit.normal * 0.003f;
+
+        //计算漫反射和镜面反射的几率
+        hit.albedo = min(1.0f - hit.specular,hit.albedo);
+        float specChance = energy(hit.specular);
+        float diffChance = energy(hit.albedo);
+        float sum = specChance + diffChance;
+        specChance /= sum;
+        diffChance /= sum;
+
+        //随机选择渲染类型
+        float roulette = rand();
+        if(roulette < specChance)
+        {
+            //发生镜面反射
+            float alpha = SmoothnessToPhongAlpha(hit.smoothness);
+            ray.direction = SampleHemisphere(reflect(ray.direction,hit.normal),alpha);
+            float f = (alpha + 2)/(alpha + 1);
+            ray.energy *= (1.0f / specChance) * hit.specular * sdot(hit.normal,ray.direction,f);
+        }
+        else
+        {
+            //发生漫反射
+            ray.direction = SampleHemisphere(hit.normal,1.0f);
+            ray.energy *= (1.0f / diffChance) * hit.albedo;
+        }
+        return hit.emission;
+
+        //阴影判断
+        bool shadow = false;
+        Ray shaowRay = CreateRay(ray.origin,-1 * _DirectionalLight.xyz);
+        RayHit shadowHit = Trace(shaowRay);
+        //向定向光方向有阻挡即位于阴影区
+        if(shadowHit.distance != 1.#INF)
+        {
+            return float3(0.0f,0.0f,0.0f);
+        }
+        //兰伯特光照
+        float3 lambert = -1 * dot(hit.normal, _DirectionalLight.xyz);
+        return saturate(lambert * _DirectionalLight.w * hit.albedo);
+    }
+    else
+    {
+        ray.energy = 0.0f;
+        //采样天空球
+        float theta = acos(ray.direction.y) / -PI;
+        float phi = atan2(ray.direction.x,-ray.direction.z) / -PI * 0.5f;
+    
+        //采样天空球
+        //return 0.5;
+        return  _SkyBoxTexture.SampleLevel(sampler_SkyBoxTexture, float2(phi, theta), 0) * _HDRIntensity;
+    }
+}
+
+//相机发射光线
+Ray CreateCameraRay(float2 uv)
+{
+    //从相机位置出发
+    float3 origin = mul(_CameraToWorld,float4(0.0f,0.0f,0.0f,1.0f)).xyz;
+    
+    //根据投影矩阵与uv位置计算光线方向
+    float3 direction = mul(_CameraInverseProjection,float4(uv,0.0f,1.0f)).xyz;
+    
+    //将光线方向转换到世界空间并归一化
+    direction = mul(_CameraToWorld,float4(direction,0.0f)).xyz;
+    direction = normalize(direction);
+
+    return CreateRay(origin,direction);
+}
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    _Pixel = id.xy;
+    //获取当前渲染尺寸
+    uint width,height;
+    Result.GetDimensions(width,height);
+
+    //id的xy为当前线程的信息,也即像素的位置。
+    //将像素置于中心点后除xy轴总像素，并映射到[-1,1]空间
+    float2 uv = float2((id.xy + float2(_PixelOffset)) / float2(width,height) * 2.0f - 1.0f);
+
+    //生成光线
+    Ray ray = CreateCameraRay(uv);
+
+    //追踪与反射
+    float3 result = float3(0,0,0);
+    for (int i = 0;i < 8; i++)
+    {
+        RayHit hit = Trace(ray);
+        //Shade同时更新光线的属性
+        result += ray.energy * Shade(ray,hit);
+      
+        //全通道无能量就退出
+        if (!any(ray.energy))
+            break;
+    }
+
+    Result[id.xy] = float4(result,1);
+}
