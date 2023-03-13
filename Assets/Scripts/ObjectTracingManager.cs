@@ -7,8 +7,23 @@ using UnityEngine.Rendering;
 struct MeshObject
 {
     public Matrix4x4 localToWorldMatrix;
+    public Matrix4x4 worldToLocalMatrix;
     public int indices_offset;
     public int indices_count;
+    public Vector3 AABBmax;
+    public Vector3 AABBmin;
+    public Vector3 albedo;   
+    public Vector3 specular; 
+    public float  smoothness;
+    public Vector3 emission;
+    public float opactiy;
+    public float refractivity;
+}
+
+struct Vertex
+{
+    public Vector3 position;
+    public Vector3 normal;
 }
 public class ObjectTracingManager : MonoBehaviour
 {
@@ -17,7 +32,7 @@ public class ObjectTracingManager : MonoBehaviour
     
     //Mesh相关参数
     private static List<MeshObject> _meshObjects = new List<MeshObject>();
-    private static List<Vector3> _vertices = new List<Vector3>();
+    private static List<Vertex> _vertices = new List<Vertex>();
     private static List<int> _indices = new List<int>();
 
     public static ComputeBuffer _meshObjectBuffer;
@@ -33,6 +48,11 @@ public class ObjectTracingManager : MonoBehaviour
     public static void UnregisterObject(RayTracingObject obj)
     {
         _rayTracingObjects.Remove(obj);
+        _meshObjectsNeedRebuilding = true;
+    }
+    
+    public static void RefreshObjects()
+    {
         _meshObjectsNeedRebuilding = true;
     }
 
@@ -57,7 +77,19 @@ public class ObjectTracingManager : MonoBehaviour
             
             //添加顶点数据
             int firstVertex = _vertices.Count;
-            _vertices.AddRange(mesh.vertices);
+            for (int i = 0; i < mesh.vertexCount; i++)
+            {
+                Vertex _vertex = new Vertex(){position = mesh.vertices[i],normal = mesh.normals[i]}; 
+                _vertices.Add(_vertex);
+            }
+
+            //生成AABB包围盒
+            Vector3 AABBmax = mesh.vertices[0];
+            Vector3 AABBmin = mesh.vertices[0];
+            for (int i = 0; i < mesh.vertices.Length; i++)
+            {
+                UpdateAABB(ref AABBmax,ref AABBmin,mesh.vertices[i]);
+            }
             
             //添加索引数据,如果不是第一个网格,需要进行偏移
             int firstIndex = _indices.Count;
@@ -69,14 +101,33 @@ public class ObjectTracingManager : MonoBehaviour
             _meshObjects.Add(new MeshObject()
                 {
                     localToWorldMatrix = obj.transform.localToWorldMatrix,
+                    worldToLocalMatrix = obj.transform.worldToLocalMatrix,
                     indices_count = indices.Length,
-                    indices_offset = firstIndex
+                    indices_offset = firstIndex,
+                    AABBmax = AABBmax,
+                    AABBmin = AABBmin,
+                    albedo = obj.albedo,
+                    specular = obj.specular,
+                    smoothness = obj.smoothness,
+                    emission = obj.emission,
+                    opactiy = obj.opacity,
+                    refractivity = obj.refractivity
                 });
             
-            CreateComputeBuffer(ref _meshObjectBuffer, _meshObjects, 72);
-            CreateComputeBuffer(ref _vertexBuffer, _vertices, 12);
+            CreateComputeBuffer(ref _meshObjectBuffer, _meshObjects, 208);
+            CreateComputeBuffer(ref _vertexBuffer, _vertices, 24);
             CreateComputeBuffer(ref _indexBuffer, _indices, 4);
         }
+    }
+
+    private static void UpdateAABB(ref Vector3 AABBmax, ref Vector3 AABBmin, Vector3 vertex)
+    {
+        AABBmax.x = AABBmax.x > vertex.x ? AABBmax.x : vertex.x;
+        AABBmax.y = AABBmax.y > vertex.y ? AABBmax.y : vertex.y;
+        AABBmax.z = AABBmax.z > vertex.z ? AABBmax.z : vertex.z;
+        AABBmin.x = AABBmin.x < vertex.x ? AABBmin.x : vertex.x;
+        AABBmin.y = AABBmin.y < vertex.y ? AABBmin.y : vertex.y;
+        AABBmin.z = AABBmin.z < vertex.z ? AABBmin.z : vertex.z;
     }
 
     private static void CreateComputeBuffer<T>(ref ComputeBuffer buffer, List<T> data, int stride)

@@ -72,8 +72,10 @@ public class RayTracingMaster : MonoBehaviour
     {
         //初始化纹理信息
         InitRenderTexture();
+        RenderTexture _test = new RenderTexture(Screen.width/4, Screen.height/4, 0, 
+            RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
         //填充数据
-        RayTracingShader.SetTexture(0,"Result",_target);
+        RayTracingShader.SetTexture(0,"Result",_test);
         //设置渲染线程
         int threadGroupsX = Mathf.CeilToInt(Screen.width / 8.0f);
         int threadGroupsY = Mathf.CeilToInt(Screen.height / 8.0f);
@@ -83,7 +85,7 @@ public class RayTracingMaster : MonoBehaviour
         if (_addMaterial == null)
             _addMaterial = new Material(Shader.Find("Hidden/AddShader"));
         _addMaterial.SetFloat("_Sample",_currentSample);
-        Graphics.Blit(_target,_converged,_addMaterial);
+        Graphics.Blit(_test,_converged,_addMaterial);
         Graphics.Blit(_converged,dest);
         _currentSample++;
     }
@@ -109,7 +111,7 @@ public class RayTracingMaster : MonoBehaviour
         RayTracingShader.SetVector("_DirectionalLight",
             new Vector4(l.x,l.y,l.z,DirectionalLight.intensity));
         
-        //设置球体
+        //设置Mesh
         SetComputeBuffer("_Spheres", _sphereBuffer);
         SetComputeBuffer("_MeshObjects", ObjectTracingManager._meshObjectBuffer);
         SetComputeBuffer("_Vertices", ObjectTracingManager._vertexBuffer);
@@ -144,7 +146,6 @@ public class RayTracingMaster : MonoBehaviour
             _converged.enableRandomWrite = true;
             _target.Create();
             _converged.Create();
-
         }
     }
     

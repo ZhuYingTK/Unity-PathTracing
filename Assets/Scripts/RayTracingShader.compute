@@ -18,6 +18,8 @@ float4 _DirectionalLight;
 
 float2 _PixelOffset;
 
+float2 _HDROffset;
+
 struct Sphere
 {
     float3 position;
@@ -32,12 +34,27 @@ StructuredBuffer<Sphere> _Spheres;
 struct MeshObject
 {
     float4x4 localToWorldMatrix;
+    float4x4 worldToLocalMatrix;
     int indices_offset;
     int indices_count;
+    float3 AABBmax;
+    float3 AABBmin;
+    float3 albedo;
+    float3 specular;
+    float smoothness;
+    float3 emission;
+    float opacity;     
+    float refractivity;
+};
+
+struct Vertex
+{
+    float3 position;
+    float3 normal;
 };
 
 StructuredBuffer<MeshObject> _MeshObjects;
-StructuredBuffer<float3> _Vertices;
+StructuredBuffer<Vertex> _Vertices;
 StructuredBuffer<int> _Indices;
 
 struct AABBBox
@@ -60,8 +77,11 @@ struct RayHit
     float3 normal;      //法线
     float3 albedo;      //命中点的反照率
     float3 specular;    //命中点的镜面反射
-    float smoothness;   //命中点粗糙度
+    float  smoothness;   //命中点粗糙度
     float3 emission;    //命中点自发光
+    float opacity;      //不透明度
+    float refractivity; //折射率
+    bool interTransparent;  //是否是进入介质
 };
 
 
@@ -135,6 +155,9 @@ RayHit CreateRayHit()
     hit.specular = float3(0.0f, 0.0f, 0.0f);
     hit.smoothness = 0.0f;
     hit.emission = float3(0.0f, 0.0f, 0.0f);
+    hit.opacity = 1;
+    hit.refractivity = 1;
+    hit.interTransparent = true;
     return hit;
 }
 
@@ -149,11 +172,10 @@ void IntersectGroundPlane(Ray ray,inout RayHit bestHit)
     {
         bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
-        bestHit.normal = float3(0.f,1.0f,0.0f);
-        bestHit.albedo = float3(0.9f,0.9f,0.9f);
-        bestHit.specular = float3(0.08f,0.08f,0.08f);
-        bestHit.smoothness = 0.03;
-        bestHit.emission = 0;
+        bestHit.normal = float3(0.0f, 1.0f, 0.0f);
+        bestHit.albedo = 0.5f;
+        //bestHit.specular = 0.3f;
+        //bestHit.smoothness = 0.5;
     }
 }
 
@@ -184,7 +206,7 @@ void IntersectSphere(Ray ray,inout RayHit bestHit,Sphere sphere)
 }
 
 
-void IntersectAABB(Ray ray,inout RayHit bestHit,AABBBox box)
+bool IntersectAABB(Ray ray,inout RayHit bestHit,AABBBox box)
 {
     //计算光线与AABB盒子的相交
     //T为当前候选面值和非候选面值
@@ -193,7 +215,7 @@ void IntersectAABB(Ray ray,inout RayHit bestHit,AABBBox box)
     {
         //如果在slab外
         if(ray.origin.x > box.Pmax.x || ray.origin.x < box.Pmin.x)
-            return;
+            return false;
         //无视当前轴向的相交面
         else
         {
@@ -214,7 +236,7 @@ void IntersectAABB(Ray ray,inout RayHit bestHit,AABBBox box)
     {
         //如果在slab外
         if(ray.origin.y > box.Pmax.y || ray.origin.y < box.Pmin.y)
-            return;
+            return false;
         //无视当前轴向的相交面
         else
         {
@@ -235,7 +257,7 @@ void IntersectAABB(Ray ray,inout RayHit bestHit,AABBBox box)
     {
         //如果在slab外
         if(ray.origin.z > box.Pmax.z || ray.origin.z < box.Pmin.z)
-            return;
+            return false;
         //无视当前轴向的相交面
         else
         {
@@ -251,35 +273,36 @@ void IntersectAABB(Ray ray,inout RayHit bestHit,AABBBox box)
     T.x = max(T.x,min(tz.x,tz.y));
     T.y = min(T.y,max(tz.x,tz.y));
     //不相交退出
-    if(T.x >= T.y) return;
-    //着色部分
-    float t = T.x;
-    if(t > 0 && t< bestHit.distance)
-    {
-        bestHit.distance = t;
-        bestHit.position = ray.origin + t * ray.direction;
-        if(T.x == tx.x)
-            bestHit.normal = float3(-1.0f,0.0f,0.0f);
-        if(T.x == tx.y)
-            bestHit.normal = float3(1.0f,0.0f,0.0f);
-        if(T.x == ty.x)
-            bestHit.normal = float3(0.0f,-1.0f,0.0f);
-        if(T.x == ty.y)
-            bestHit.normal = float3(0.0f,1.0f,0.0f);
-        if(T.x == tz.x)
-            bestHit.normal = float3(0.0f,0.0f,1.0f);
-        if(T.x == tz.y)
-            bestHit.normal = float3(0.0f,0.0f,-1.0f);
-        bestHit.albedo = float3(0.9f,0.9f,0.9f);
-        bestHit.specular = float3(0.08f,0.08f,0.08f);
-        bestHit.smoothness = 0.03;
-        bestHit.emission = 0;
-    }
+    if(T.x >= T.y) return false;
+    //////着色部分
+    //float t = T.x;
+    //if(t > 0 && t< bestHit.distance)
+    //{
+    //    bestHit.distance = t;
+    //    bestHit.position = ray.origin + t * ray.direction;
+    //    if(T.x == tx.x)
+    //        bestHit.normal = float3(-1.0f,0.0f,0.0f);
+    //    if(T.x == tx.y)
+    //        bestHit.normal = float3(1.0f,0.0f,0.0f);
+    //    if(T.x == ty.x)
+    //        bestHit.normal = float3(0.0f,-1.0f,0.0f);
+    //    if(T.x == ty.y)
+    //        bestHit.normal = float3(0.0f,1.0f,0.0f);
+    //    if(T.x == tz.x)
+    //        bestHit.normal = float3(0.0f,0.0f,1.0f);
+    //    if(T.x == tz.y)
+    //        bestHit.normal = float3(0.0f,0.0f,-1.0f);
+    //    bestHit.albedo = float3(0.9f,0.9f,0.9f);
+    //    bestHit.specular = float3(0.08f,0.08f,0.08f);
+    //    bestHit.smoothness = 0.03;
+    //    bestHit.emission = 0;
+    //}
+    return true;
 }
 
 //三角形测试方法
 bool IntersectTriangle_MT97(Ray ray,float3 vert0,float3 vert1,float3 vert2,
-                                inout float t,inout float u,inout float v)
+                                inout float t,inout float u,inout float v,inout RayHit hit)
 {
     //从v0指向v1,v2的两条向量
     float3 edge1 = vert1 - vert0;
@@ -291,8 +314,10 @@ bool IntersectTriangle_MT97(Ray ray,float3 vert0,float3 vert1,float3 vert2,
     float det = dot(edge1,P_vec);
     //进行背面剔除
     if(det < EPSILON)
-        return false;
-    float inv_det = 1.0f / det;
+        hit.interTransparent = false;
+    else
+        hit.interTransparent = true;
+    float inv_det = abs( 1.0f / det);
 
     float3 T_vec = ray.origin - vert0;
     //计算u值参数并测试
@@ -311,26 +336,39 @@ bool IntersectTriangle_MT97(Ray ray,float3 vert0,float3 vert1,float3 vert2,
 
 void IntersectMeshObject(Ray ray,inout RayHit bestHit,MeshObject meshobject)
 {
+    AABBBox box;
+    box.Pmax = (mul(meshobject.localToWorldMatrix,float4(meshobject.AABBmax,1))).xyz;
+    box.Pmin = (mul(meshobject.localToWorldMatrix,float4(meshobject.AABBmin,1))).xyz;
+    //if(!IntersectAABB(ray,bestHit,box)) return;;
+    
     uint offset = meshobject.indices_offset;
     uint count = offset + meshobject.indices_count;
     for(uint i = offset ; i < count ; i+=3)
     {
-        float3 v0 = (mul(meshobject.localToWorldMatrix,float4(_Vertices[_Indices[i]],1))).xyz;
-        float3 v1 = (mul(meshobject.localToWorldMatrix,float4(_Vertices[_Indices[i+1]],1))).xyz;
-        float3 v2 = (mul(meshobject.localToWorldMatrix,float4(_Vertices[_Indices[i+2]],1))).xyz;
+        Vertex v0 = _Vertices[_Indices[i]];
+        Vertex v1 = _Vertices[_Indices[i+1]];
+        Vertex v2 = _Vertices[_Indices[i+2]];
+        float3 vn0 = normalize(mul(v0.normal,(float3x3)meshobject.worldToLocalMatrix));
+        float3 vn1 = normalize(mul(v1.normal,(float3x3)meshobject.worldToLocalMatrix));
+        float3 vn2 = normalize(mul(v2.normal,(float3x3)meshobject.worldToLocalMatrix));
+        float3 vp0 = (mul(meshobject.localToWorldMatrix,float4(v0.position,1))).xyz;
+        float3 vp1 = (mul(meshobject.localToWorldMatrix,float4(v1.position,1))).xyz;
+        float3 vp2 = (mul(meshobject.localToWorldMatrix,float4(v2.position,1))).xyz;
         float t,u,v;
-        t = 1.#INF ; u=0;v=0;
-        if (IntersectTriangle_MT97(ray, v0, v1, v2, t, u, v))
+        if (IntersectTriangle_MT97(ray, vp0, vp1, vp2, t, u, v,bestHit))
         {
             if (t > 0 && t < bestHit.distance)
             {
                 bestHit.distance = t;
                 bestHit.position = ray.origin + t * ray.direction;
-                bestHit.normal = normalize(cross(v1 - v0, v2 - v0));
-                bestHit.albedo = 0.0f;
-                bestHit.specular = 0.65f;
-                bestHit.smoothness = 0.99f;
-                bestHit.emission = 0.0f;
+                //bestHit.normal = normalize(cross(vp1 - vp0, vp2 - vp0));
+                bestHit.normal = (1-u-v) * vn0 + u * vn1 + v * vn2;
+                bestHit.albedo = meshobject.albedo;
+                bestHit.specular = meshobject.specular;
+                bestHit.smoothness = meshobject.smoothness;
+                bestHit.emission = meshobject.emission;
+                bestHit.opacity = meshobject.opacity;
+                bestHit.refractivity = meshobject.refractivity;
             }
         }
     }
@@ -373,22 +411,36 @@ float3 Shade (inout Ray ray,RayHit hit)
         float sum = specChance + diffChance;
         specChance /= sum;
         diffChance /= sum;
-
+        
         //随机选择渲染类型
         float roulette = rand();
-        if(roulette < specChance)
+        if(roulette < hit.opacity)
         {
-            //发生镜面反射
-            float alpha = SmoothnessToPhongAlpha(hit.smoothness);
-            ray.direction = SampleHemisphere(reflect(ray.direction,hit.normal),alpha);
-            float f = (alpha + 2)/(alpha + 1);
-            ray.energy *= (1.0f / specChance) * hit.specular * sdot(hit.normal,ray.direction,f);
+            roulette = rand();
+            //不透明情况
+            if(roulette < specChance)
+            {
+                //发生镜面反射
+                float alpha = SmoothnessToPhongAlpha(hit.smoothness);
+                ray.direction = SampleHemisphere(reflect(ray.direction,hit.normal),alpha);
+                float f = (alpha + 2)/(alpha + 1);
+                ray.energy *= (1.0f / specChance) * hit.specular * sdot(hit.normal,ray.direction,f);
+            }
+            else
+            {
+                //发生漫反射
+                ray.direction = SampleHemisphere(hit.normal,1.0f);
+                ray.energy *= (1.0f / diffChance) * hit.albedo;
+            }
         }
         else
         {
-            //发生漫反射
-            ray.direction = SampleHemisphere(hit.normal,1.0f);
-            ray.energy *= (1.0f / diffChance) * hit.albedo;
+            ray.origin = hit.position - hit.normal * 0.003f;
+            if(hit.interTransparent)
+                ray.direction = refract(ray.direction,hit.normal, 1 / hit.refractivity);
+            else
+                ray.direction = refract(ray.direction,-hit.normal, hit.refractivity);
+            if(ray.direction.x == 0 && ray.direction.y == 0 && ray.direction.z == 0) ray.energy = 0;
         }
         return hit.emission;
 
