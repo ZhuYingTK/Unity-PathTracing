@@ -489,10 +489,15 @@ Ray CreateCameraRay(float2 uv)
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
-    _Pixel = id.xy;
+    _Pixel = id.xy + float2(_PixelOffset);
+    uint2 targetIdx = id.xy + uint2(floor(_PixelOffset));
     //获取当前渲染尺寸
     uint width,height;
     Result.GetDimensions(width,height);
+
+    //越界不渲染
+    if(targetIdx.x >= width || targetIdx.y >= height)
+        return;
 
     //id的xy为当前线程的信息,也即像素的位置。
     //将像素置于中心点后除xy轴总像素，并映射到[-1,1]空间
@@ -514,5 +519,5 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             break;
     }
 
-    Result[id.xy] = float4(result,1);
+    Result[targetIdx] = float4(result,1);
 }

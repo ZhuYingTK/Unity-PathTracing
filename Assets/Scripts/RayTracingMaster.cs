@@ -18,6 +18,13 @@ public class RayTracingMaster : MonoBehaviour
     public Texture SkyboxTexture;
     public int Seed;
     [Range(0f, 5f)] public float HDRIntensity = 1;
+    
+    //分块渲染参数
+    private readonly int dispatchGroupX = 32;
+    private readonly int dispatchGroupY = 32;
+    private int dispatchGroupXFull, dispatchGroupYFull;
+    private Vector4 dispatchCount;
+    private int currentDownSampler = 1;
 
     //定向光
     public Light DirectionalLight;
@@ -42,7 +49,7 @@ public class RayTracingMaster : MonoBehaviour
 
     private void OnEnable()
     {
-        _currentSample = 0;
+        RefreshRenderTextureData();
         _sphereBuffer = new CreateSpheres( Seed).Create();
     }
 
@@ -57,13 +64,13 @@ public class RayTracingMaster : MonoBehaviour
         if (transform.hasChanged)
         {
             //重新开始抗锯齿
-            _currentSample = 0;
+            RefreshRenderTextureData();
             transform.hasChanged = false;
         }
         if(DirectionalLight.transform.hasChanged)
         {
             //重新开始抗锯齿
-            _currentSample = 0;
+            RefreshRenderTextureData();
             DirectionalLight.transform.hasChanged = false;
         }
     }
@@ -72,22 +79,18 @@ public class RayTracingMaster : MonoBehaviour
     {
         //初始化纹理信息
         InitRenderTexture();
-        RenderTexture _test = new RenderTexture(Screen.width/4, Screen.height/4, 0, 
-            RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
         //填充数据
-        RayTracingShader.SetTexture(0,"Result",_test);
-        //设置渲染线程
-        int threadGroupsX = Mathf.CeilToInt(Screen.width / 8.0f);
-        int threadGroupsY = Mathf.CeilToInt(Screen.height / 8.0f);
-        RayTracingShader.Dispatch(0,threadGroupsX,threadGroupsY,1);
+        RayTracingShader.SetTexture(0,"Result",_target);
+        RayTracingShader.Dispatch(0,dispatchGroupX,dispatchGroupY,1);
         
         //抗锯齿
         if (_addMaterial == null)
             _addMaterial = new Material(Shader.Find("Hidden/AddShader"));
         _addMaterial.SetFloat("_Sample",_currentSample);
-        Graphics.Blit(_test,_converged,_addMaterial);
+        Graphics.Blit(_target,_converged,_addMaterial);
         Graphics.Blit(_converged,dest);
-        _currentSample++;
+        
+        UpdateDispatchCount();
     }
     
     /// <summary>
@@ -104,7 +107,7 @@ public class RayTracingMaster : MonoBehaviour
         RayTracingShader.SetTexture(0,"_SkyBoxTexture", SkyboxTexture);
         
         //抗锯齿抖动
-        RayTracingShader.SetVector("_PixelOffset",new Vector2(Random.value,Random.value));
+        RayTracingShader.SetVector("_PixelOffset",GetPixelOffset());
         
         //定向光
         Vector3 l = DirectionalLight.transform.forward;
@@ -128,26 +131,106 @@ public class RayTracingMaster : MonoBehaviour
     /// </summary>
     private void InitRenderTexture()
     {
-        if (_target == null || _target.width != Screen.width || _target.height != Screen.height)
+        if (_converged == null || _converged.width != Screen.width || _converged.height != Screen.height)
         {
             //如果已经有target了,就释放
-            if (_target != null)
+            if (_converged != null)
             {
-                _target.Release();
                 _converged.Release();
             }
             
-            _target = new RenderTexture(Screen.width, Screen.height, 0, 
-                RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
             _converged = new RenderTexture(Screen.width, Screen.height, 0, 
                 RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
             
-            _target.enableRandomWrite = true;
             _converged.enableRandomWrite = true;
-            _target.Create();
             _converged.Create();
+            RefreshRenderTextureData();
         }
     }
+
+    public void RefreshRenderTextureData()
+    {
+        while ((dispatchGroupX * 8) << currentDownSampler <= Screen.width ||
+               (dispatchGroupY * 8) << currentDownSampler <= Screen.height)
+        {
+            currentDownSampler ++;
+        }
+
+        _currentSample = 0;
+        dispatchCount.x = 0;
+        dispatchCount.y = 0;
+        RefreshTargetTexture();
+        //更新线程组
+    }
+
+    /// <summary>
+    /// 获得当前目标贴图目标贴图
+    /// </summary>
+    private void RefreshTargetTexture()
+    {
+        if (_target != null)
+        {
+            _target.Release();
+        }
+        
+        _target = new RenderTexture(Screen.width >> currentDownSampler,
+            Screen.height >> currentDownSampler,0,
+        RenderTextureFormat.ARGBFloat , RenderTextureReadWrite.Linear);
+        _target.enableRandomWrite = true;
+        _target.Create();
+        
+        EstimateGroupsData(_target.width,_target.height);
+    }
+
+    /// <summary>
+    /// 估算线程组
+    /// </summary>
+    private void EstimateGroupsData(int width,int height)
+    {
+        //以dispatchGroupX*Y为线程组,以 8x8 为单组线程数
+        dispatchCount = new Vector4(
+            0f, 0f,
+            Mathf.Ceil(width / (float) (dispatchGroupX * 8)),
+            Mathf.Ceil(height / (float) (dispatchGroupY * 8))
+        );
+    }
+    
+    /// <summary>
+    /// 计算渲染块的位移
+    /// </summary>
+    private void UpdateDispatchCount()
+    {
+        dispatchCount.x += 1f;
+        if (dispatchCount.x > dispatchCount.z)
+        {
+            dispatchCount.x = 0f;
+            dispatchCount.y += 1f;
+            if (dispatchCount.y >= dispatchCount.w)
+            {
+                dispatchCount.x = 0f;
+                dispatchCount.y = 0f;
+                _currentSample++;
+                if (currentDownSampler > 0)
+                {
+                    currentDownSampler--;
+                    RefreshTargetTexture();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 获得当前偏移量
+    /// </summary>
+    /// <returns></returns>
+    private Vector2 GetPixelOffset()
+    {
+        Vector2 offset = new Vector2(Random.value, Random.value);
+        offset.x += dispatchCount.x * dispatchGroupX * 8;
+        offset.y += dispatchCount.y * dispatchGroupY * 8;
+        return offset;
+    }
+    
     
     //判断null并传递给GPU
     private void SetComputeBuffer(string name, ComputeBuffer buffer)

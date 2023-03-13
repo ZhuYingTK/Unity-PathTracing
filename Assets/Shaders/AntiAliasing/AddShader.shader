@@ -49,7 +49,8 @@ Shader "Hidden/AddShader"
 
             fixed4 frag (v2f i) : SV_Target
             {
-                return float4(tex2D(_MainTex,i.uv).rgb, 1.0f/(_Sample + 1.0f));
+                float4 color = tex2D(_MainTex,i.uv);
+                return float4(color.rgb,color.a *  1.0f/(_Sample + 1.0f));
             }
             ENDCG
         }
