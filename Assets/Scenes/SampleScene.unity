@@ -677,7 +677,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 01b2a1b75312dec4c8ea63eb7afce993, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  RayTracingShader: {fileID: 7200000, guid: 2b120e654de394e47979f48dfe6b0b8e, type: 3}
+  RayTracingShader: {fileID: 7200000, guid: 07a2d3eb0fc3eb34eb50f872d443fb6e, type: 3}
   SkyboxTexture: {fileID: 2800000, guid: a92911fc2c1c0dc498f06622a54e8faf, type: 3}
   Seed: 0
   HDRIntensity: 1.93
