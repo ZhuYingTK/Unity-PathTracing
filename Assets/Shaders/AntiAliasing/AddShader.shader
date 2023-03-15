@@ -37,6 +37,7 @@ Shader "Hidden/AddShader"
 
             sampler2D _MainTex;
             float4 _MainTex_ST;
+            float4 _Mask;
             float _Sample;
 
             v2f vert (appdata v)
@@ -50,7 +51,10 @@ Shader "Hidden/AddShader"
             fixed4 frag (v2f i) : SV_Target
             {
                 float4 color = tex2D(_MainTex,i.uv);
-                return float4(color.rgb,color.a *  1.0f/(_Sample + 1.0f));
+                float2 mask;
+                mask.x = step(i.uv.x,_Mask.x + _Mask.z) * step(_Mask.x,i.uv.x);
+                mask.y = step(i.uv.y,_Mask.y + _Mask.w) * step(_Mask.y,i.uv.y);
+                return float4(color.rgb,color.a * 1.0f/(_Sample + 1.0f) * mask.x * mask.y);
             }
             ENDCG
         }

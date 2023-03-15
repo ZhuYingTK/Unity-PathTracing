@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using Unity.VisualScripting;
 using Unity.VisualScripting.Dependencies.NCalc;
 using UnityEditor.Experimental.GraphView;
@@ -10,6 +11,7 @@ using Random = UnityEngine.Random;
 public class RayTracingMaster : MonoBehaviour
 {
     public static uint _currentSample = 0;
+    private bool shouldRefreshSample = true;
     
     public ComputeShader RayTracingShader;
     private RenderTexture _target;
@@ -24,7 +26,7 @@ public class RayTracingMaster : MonoBehaviour
     private readonly int dispatchGroupY = 32;
     private int dispatchGroupXFull, dispatchGroupYFull;
     private Vector4 dispatchCount;
-    private int currentDownSampler = 1;
+    private int currentDownSampler = 0;
 
     //定向光
     public Light DirectionalLight;
@@ -87,6 +89,8 @@ public class RayTracingMaster : MonoBehaviour
         if (_addMaterial == null)
             _addMaterial = new Material(Shader.Find("Hidden/AddShader"));
         _addMaterial.SetFloat("_Sample",_currentSample);
+        Vector4 mask = GetAddMask();
+        _addMaterial.SetVector("_Mask",GetAddMask());
         Graphics.Blit(_target,_converged,_addMaterial);
         Graphics.Blit(_converged,dest);
         
@@ -124,6 +128,7 @@ public class RayTracingMaster : MonoBehaviour
         RayTracingShader.SetFloat("_Seed",Random.value);
         
         RayTracingShader.SetFloat("_HDRIntensity",HDRIntensity);
+        RayTracingShader.SetFloat("_Sample",_currentSample);
     }
     
     /// <summary>
@@ -205,14 +210,16 @@ public class RayTracingMaster : MonoBehaviour
         {
             dispatchCount.x = 0f;
             dispatchCount.y += 1f;
-            if (dispatchCount.y >= dispatchCount.w)
+            if (dispatchCount.y > dispatchCount.w)
             {
                 dispatchCount.x = 0f;
                 dispatchCount.y = 0f;
                 _currentSample++;
+                shouldRefreshSample = true;
                 if (currentDownSampler > 0)
                 {
                     currentDownSampler--;
+                    _currentSample = 0;
                     RefreshTargetTexture();
                 }
             }
@@ -240,4 +247,33 @@ public class RayTracingMaster : MonoBehaviour
             RayTracingShader.SetBuffer(0, name, buffer);
         }
     }
+
+    private Vector4 GetAddMask()
+    {
+        Vector2 offset = new Vector2(
+            dispatchCount.x * dispatchGroupX * 8,
+            dispatchCount.y * dispatchGroupY * 8);
+        return new Vector4(offset.x / _target.width, offset.y / _target.height,
+            dispatchGroupX * 8 / (float)_target.width, dispatchGroupY * 8 / (float)_target.height);
+    }
+    
+    //将RenderTexture保存成一张png图片  
+    public bool SaveRenderTextureToPNG(RenderTexture rt, string contents, string pngName)
+    {
+        RenderTexture prev = RenderTexture.active;
+        RenderTexture.active = rt;
+        Texture2D png = new Texture2D(rt.width, rt.height, TextureFormat.ARGB32, false);
+        png.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+        byte[] bytes = png.EncodeToPNG();
+        if (!Directory.Exists(contents))
+            Directory.CreateDirectory(contents);
+        FileStream file = File.Open(contents + "/" + pngName + ".png", FileMode.Create);
+        BinaryWriter writer = new BinaryWriter(file);
+        writer.Write(bytes);
+        file.Close();
+        Texture2D.DestroyImmediate(png);
+        png = null;
+        RenderTexture.active = prev;
+        return true;
+    }  
 }
