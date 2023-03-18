@@ -1,55 +1,7 @@
 #pragma kernel CSMain
 
 #include "TraceLibrary/StructsData.hlsl"
-
-float rand()
-{
-    float result = frac(sin(_Seed / 100.0f * dot(_Pixel, float2(12.9898f, 78.233f))) * 43758.5453f);
-    _Seed += 1.0f;
-    return result;
-}
-
-float3x3 GetTangentSpace(float3 normal)
-{
-    float3 helper = float3(1,0,0);
-    if(abs(normal.x) > 0.99f)
-        helper = float3(0,0,1);
-
-    //生产切线和副切线
-    float3 tangent = normalize(cross(normal,helper));
-    float3 binormal = normalize(cross(normal,tangent));
-    return float3x3 (tangent,binormal,normal);
-}
-
-float3 SampleHemisphere(float3 normal,float alpha = 0)
-{
-    //根据两个角度确定向量,其中alpha是对采样的变换
-    float cosTheta = pow( rand(),1.0f / (alpha + 1.0f));
-    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
-    float phi = 2 * PI * rand();
-    float3 tangentSpaceDir = float3(cos(phi) * sinTheta, sin(phi) * sinTheta,cosTheta);
-
-    //坐标转换
-    return mul(tangentSpaceDir,GetTangentSpace(normal));
-}
-
-float sdot(float3 x, float3 y, float f = 1.0f)
-{
-    return saturate(dot(x, y) * f);
-}
-
-float energy(float3 color)
-{
-    //平均颜色
-    return dot(color,1.0f / 3.0f);
-}
-
-float SmoothnessToPhongAlpha(float s)
-{
-    return pow(1000.0f,s * s);
-}
-
-
+#include "TraceLibrary/Functions.hlsl"
 
 //创建光线
 Ray CreateRay(float3 origin,float3 direction)
@@ -68,12 +20,7 @@ RayHit CreateRayHit()
     hit.position = float3(0.0f, 0.0f, 0.0f);
     hit.distance = 1.#INF;
     hit.normal = float3(0.0f, 0.0f, 0.0f);
-    hit.albedo = float3(0.0f, 0.0f, 0.0f);
-    hit.specular = float3(0.0f, 0.0f, 0.0f);
-    hit.smoothness = 0.0f;
-    hit.emission = float3(0.0f, 0.0f, 0.0f);
-    hit.opacity = 1;
-    hit.refractivity = 1;
+    hit.materialId = 0;
     hit.interTransparent = true;
     return hit;
 }
@@ -90,7 +37,6 @@ void IntersectGroundPlane(Ray ray,inout RayHit bestHit)
         bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.normal = float3(0.0f, 1.0f, 0.0f);
-        bestHit.albedo = 0.5f;
         //bestHit.specular = 0.3f;
         //bestHit.smoothness = 0.5;
     }
@@ -115,10 +61,6 @@ void IntersectSphere(Ray ray,inout RayHit bestHit,Sphere sphere)
         bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.normal = normalize(bestHit.position - sphere.position);
-        bestHit.albedo = sphere.albedo;
-        bestHit.specular = sphere.specular;
-        bestHit.smoothness = sphere.smoothness;
-        bestHit.emission = sphere.emission;
     }
 }
 
@@ -280,12 +222,7 @@ void IntersectMeshObject(Ray ray,inout RayHit bestHit,MeshObject meshobject)
                 bestHit.position = ray.origin + t * ray.direction;
                 //bestHit.normal = normalize(cross(vp1 - vp0, vp2 - vp0));
                 bestHit.normal = (1-u-v) * vn0 + u * vn1 + v * vn2;
-                bestHit.albedo = meshobject.albedo;
-                bestHit.specular = meshobject.specular;
-                bestHit.smoothness = meshobject.smoothness;
-                bestHit.emission = meshobject.emission;
-                bestHit.opacity = meshobject.opacity;
-                bestHit.refractivity = meshobject.refractivity;
+                bestHit.materialId = meshobject.MaterialID;
             }
         }
     }
@@ -318,48 +255,49 @@ float3 Shade (inout Ray ray,RayHit hit)
 {
     if(hit.distance < 1.#INF)
     {
+        MaterialData mat = _MaterialDatas[hit.materialId];
         //考虑浮点数精确性进行偏移
         ray.origin = hit.position + hit.normal * 0.003f;
 
         //计算漫反射和镜面反射的几率
-        hit.albedo = min(1.0f - hit.specular,hit.albedo);
-        float specChance = energy(hit.specular);
-        float diffChance = energy(hit.albedo);
+        mat.color = min(1.0f - mat.metallic,mat.color);
+        float specChance = energy(mat.metallic);
+        float diffChance = energy(mat.color);
         float sum = specChance + diffChance;
         specChance /= sum;
         diffChance /= sum;
         
         //随机选择渲染类型
         float roulette = rand();
-        if(roulette < hit.opacity)
+        if(roulette <mat.color.a)
         {
             roulette = rand();
             //不透明情况
             if(roulette < specChance)
             {
                 //发生镜面反射
-                float alpha = SmoothnessToPhongAlpha(hit.smoothness);
+                float alpha = SmoothnessToPhongAlpha(mat.smoothness);
                 ray.direction = SampleHemisphere(reflect(ray.direction,hit.normal),alpha);
                 float f = (alpha + 2)/(alpha + 1);
-                ray.energy *= (1.0f / specChance) * hit.specular * sdot(hit.normal,ray.direction,f);
+                ray.energy *= (1.0f / specChance) * mat.metallic * sdot(hit.normal,ray.direction,f);
             }
             else
             {
                 //发生漫反射
                 ray.direction = SampleHemisphere(hit.normal,1.0f);
-                ray.energy *= (1.0f / diffChance) * hit.albedo;
+                ray.energy *= (1.0f / diffChance) * mat.color;
             }
         }
         else
         {
             ray.origin = hit.position - hit.normal * 0.003f;
             if(hit.interTransparent)
-                ray.direction = refract(ray.direction,hit.normal, 1 / hit.refractivity);
+                ray.direction = refract(ray.direction,hit.normal, 1 / mat.color.a);
             else
-                ray.direction = refract(ray.direction,-hit.normal, hit.refractivity);
+                ray.direction = refract(ray.direction,-hit.normal, mat.color.a);
             if(ray.direction.x == 0 && ray.direction.y == 0 && ray.direction.z == 0) ray.energy = 0;
         }
-        return hit.emission;
+        return mat.emission;
 
         //阴影判断
         bool shadow = false;
@@ -372,7 +310,7 @@ float3 Shade (inout Ray ray,RayHit hit)
         }
         //兰伯特光照
         float3 lambert = -1 * dot(hit.normal, _DirectionalLight.xyz);
-        return saturate(lambert * _DirectionalLight.w * hit.albedo);
+        return saturate(lambert * _DirectionalLight.w * mat.color);
     }
     else
     {

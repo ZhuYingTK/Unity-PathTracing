@@ -123,6 +123,7 @@ public class RayTracingMaster : MonoBehaviour
         SetComputeBuffer("_MeshObjects", ObjectTracingManager._meshObjectBuffer);
         SetComputeBuffer("_Vertices", ObjectTracingManager._vertexBuffer);
         SetComputeBuffer("_Indices", ObjectTracingManager._indexBuffer);
+        SetComputeBuffer("_MaterialDatas",ObjectTracingManager._materialBuffer);
         
         //传入随机值
         RayTracingShader.SetFloat("_Seed",Random.value);

@@ -1,13 +1,10 @@
-static const float PI = 3.14159265f;
 static const float EPSILON = 1e-8;
-float _Seed;
 
 RWTexture2D<float4> Result;
 Texture2D<float4> _SkyBoxTexture;
 SamplerState sampler_SkyBoxTexture;
 float4x4 _CameraToWorld;
 float4x4 _CameraInverseProjection;
-float2 _Pixel;
 float _HDRIntensity;
 float4 _DirectionalLight;
 float2 _PixelOffset;
@@ -32,13 +29,19 @@ struct MeshObject
     int indices_count;
     float3 AABBmax;
     float3 AABBmin;
-    float3 albedo;
-    float3 specular;
-    float smoothness;
-    float3 emission;
-    float opacity;     
-    float refractivity;
+    int MaterialID;
 };
+
+struct MaterialData
+{
+    float4 color;
+    float3 emission;
+    float metallic;
+    float smoothness;
+    float ior;
+    float mode;
+};
+StructuredBuffer<MaterialData> _MaterialDatas;
 
 struct Vertex
 {
@@ -68,11 +71,6 @@ struct RayHit
     float3 position;    //命中点
     float distance;     //到光线出发点距离
     float3 normal;      //法线
-    float3 albedo;      //命中点的反照率
-    float3 specular;    //命中点的镜面反射
-    float  smoothness;   //命中点粗糙度
-    float3 emission;    //命中点自发光
-    float opacity;      //不透明度
-    float refractivity; //折射率
+    int materialId;     //材质ID
     bool interTransparent;  //是否是进入介质
 };

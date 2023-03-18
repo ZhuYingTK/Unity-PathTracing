@@ -4,21 +4,6 @@ using System.Linq;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-struct MeshObject
-{
-    public Matrix4x4 localToWorldMatrix;
-    public Matrix4x4 worldToLocalMatrix;
-    public int indices_offset;
-    public int indices_count;
-    public Vector3 AABBmax;
-    public Vector3 AABBmin;
-    public Vector3 albedo;   
-    public Vector3 specular; 
-    public float  smoothness;
-    public Vector3 emission;
-    public float opactiy;
-    public float refractivity;
-}
 
 struct Vertex
 {
@@ -34,10 +19,12 @@ public class ObjectTracingManager : MonoBehaviour
     private static List<MeshObject> _meshObjects = new List<MeshObject>();
     private static List<Vertex> _vertices = new List<Vertex>();
     private static List<int> _indices = new List<int>();
+    private static List<MaterialData> _materials = new List<MaterialData>();
 
     public static ComputeBuffer _meshObjectBuffer;
     public static ComputeBuffer _vertexBuffer;
     public static ComputeBuffer _indexBuffer;
+    public static ComputeBuffer _materialBuffer;
 
     public static void RegisterObject(RayTracingObject obj)
     {
@@ -70,10 +57,37 @@ public class ObjectTracingManager : MonoBehaviour
         _meshObjects.Clear();
         _vertices.Clear();
         _indices.Clear();
+        _materials.Clear();
+        
+        //创建默认材质为0号
+        _materials.Add(new MaterialData()
+        {
+            Color = new Vector4(1.0f, 1.0f, 1.0f,1.0f),
+            Emission = Vector3.zero,
+            Metallic = 0.04f,
+            Smoothness = 0.5f,
+            IOR = 1.0f,
+            RenderMode = 0,
+        });
 
         foreach (RayTracingObject obj in _rayTracingObjects)
         {
             Mesh mesh = obj.GetComponent<MeshFilter>().sharedMesh;
+            Material mat = obj.GetComponent<Renderer>().sharedMaterial;
+            bool isTracingMat = false;
+            if (mat.shader == Shader.Find("RayTracingShader"))
+            {
+                isTracingMat = true;
+                _materials.Add(new MaterialData()
+                {
+                    Color = PathTracingFunction.ColorToVector4(mat.color),
+                    Emission = mat.IsKeywordEnabled("_EMISSION") ? PathTracingFunction.ColorToVector3(mat.GetColor("_EmissionColor")) : Vector3.zero,
+                    Metallic = mat.GetFloat("_Metallic"),
+                    Smoothness = mat.GetFloat("_Glossiness"), // 透明度
+                    IOR = mat.HasProperty("_IOR") ? mat.GetFloat("_IOR") : 1.0f,
+                    RenderMode = mat.GetFloat("_Mode"), // 如果>0则为透明
+                });
+            }
             
             //添加顶点数据
             int firstVertex = _vertices.Count;
@@ -106,18 +120,13 @@ public class ObjectTracingManager : MonoBehaviour
                     indices_offset = firstIndex,
                     AABBmax = AABBmax,
                     AABBmin = AABBmin,
-                    albedo = obj.albedo,
-                    specular = obj.specular,
-                    smoothness = obj.smoothness,
-                    emission = obj.emission,
-                    opactiy = obj.opacity,
-                    refractivity = obj.refractivity
+                    MaterialID = isTracingMat ? _materials.Count-1 : 0
                 });
-            
-            CreateComputeBuffer(ref _meshObjectBuffer, _meshObjects, 208);
-            CreateComputeBuffer(ref _vertexBuffer, _vertices, 24);
-            CreateComputeBuffer(ref _indexBuffer, _indices, 4);
         }
+        CreateComputeBuffer(ref _meshObjectBuffer, _meshObjects, MeshObject.TypeSize);
+        CreateComputeBuffer(ref _materialBuffer,_materials,MaterialData.TypeSize);
+        CreateComputeBuffer(ref _vertexBuffer, _vertices, 24);
+        CreateComputeBuffer(ref _indexBuffer, _indices, 4);
     }
 
     private static void UpdateAABB(ref Vector3 AABBmax, ref Vector3 AABBmin, Vector3 vertex)
@@ -156,4 +165,5 @@ public class ObjectTracingManager : MonoBehaviour
             buffer.SetData(data);
         }
     }
+    
 }
