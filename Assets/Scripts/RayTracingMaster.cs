@@ -130,6 +130,13 @@ public class RayTracingMaster : MonoBehaviour
         
         RayTracingShader.SetFloat("_HDRIntensity",HDRIntensity);
         RayTracingShader.SetFloat("_Sample",_currentSample);
+        
+        //传入贴图
+        SetTextureArray("_AlbedoTextures",ObjectTracingManager.AlbedoTextures);
+        SetTextureArray("_NormalTextures",ObjectTracingManager.NormalTextures);
+        SetTextureArray("_RoughnessTextures",ObjectTracingManager.RoughnessTextures);
+        SetTextureArray("_MetallicTextures",ObjectTracingManager.MetallicTextures);
+        SetTextureArray("_EmissionTextures",ObjectTracingManager.EmissionTextures);
     }
     
     /// <summary>
@@ -246,6 +253,14 @@ public class RayTracingMaster : MonoBehaviour
         if (buffer != null)
         {
             RayTracingShader.SetBuffer(0, name, buffer);
+        }
+    }
+
+    private void SetTextureArray(string name, Texture2DArray buffer)
+    {
+        if (buffer != null)
+        {
+            RayTracingShader.SetTexture(0,name,buffer);
         }
     }
 

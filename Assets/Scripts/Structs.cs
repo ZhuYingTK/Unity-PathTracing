@@ -10,8 +10,13 @@ public struct MaterialData
     public float Smoothness;
     public float IOR;
     public float RenderMode;
+    public int AlbedoIdx;
+    public int EmisIdx;
+    public int MetallicIdx;
+    public int NormalIdx;
+    public int RoughIdx;
 
-    public static int TypeSize = sizeof(float) * 11;
+    public static int TypeSize = sizeof(float)*11+sizeof(int)*5;
 }
 
 public struct MeshObject

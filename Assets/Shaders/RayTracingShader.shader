@@ -11,15 +11,15 @@ Shader "RayTracingShader"
         [Enum(Opaque,0,Cutout,1,Fade,2,Transparent,3)] _Mode("Rendering Mode", Float) = 0.0
 
         _Color("颜色", Color) = (1,1,1,1)
-        [HideInInspector]_MainTex("Albedo", 2D) = "white" {}
+        _MainTex("固有色贴图", 2D) = "white" {}
 
         [HideInInspector]_Cutoff("Alpha Cutoff", Range(0.0, 1.0)) = 0.5
 
         _Glossiness("光滑度", Range(0.0, 1.0)) = 0.5
-        [HideInInspector]_SpecGlossMap("Roughness Map", 2D) = "white" {}
+        _SpecGlossMap("粗糙度贴图", 2D) = "white" {}
 
         _Metallic("金属度", Range(0.0, 1.0)) = 0.0
-        [HideInInspector]_MetallicGlossMap("Metallic", 2D) = "white" {}
+        _MetallicGlossMap("金属度贴图", 2D) = "white" {}
 
         _IOR("折射率", Range(1.0, 3.0)) = 1.0
 
@@ -27,7 +27,7 @@ Shader "RayTracingShader"
         [HideInInspector] [ToggleOff] _GlossyReflections("Glossy Reflections", Float) = 1.0
 
         [HideInInspector] _BumpScale("Scale", Float) = 1.0
-        [HideInInspector][Normal] _BumpMap("Normal Map", 2D) = "bump" {}
+        [Normal] _BumpMap("法线贴图", 2D) = "bump" {}
 
         [HideInInspector] _Parallax("Height Scale", Range(0.005, 0.08)) = 0.02
         [HideInInspector]_ParallaxMap("Height Map", 2D) = "black" {}
@@ -37,7 +37,7 @@ Shader "RayTracingShader"
 
         [Toggle] _Emission("是否开启自发光", Float) = 0
         _EmissionColor("自发光颜色", Color) = (0,0,0)
-        [HideInInspector]_EmissionMap("Emission", 2D) = "white" {}
+        _EmissionMap("自发光贴图", 2D) = "white" {}
 
         [HideInInspector] _DetailMask("Detail Mask", 2D) = "white" {}
 
